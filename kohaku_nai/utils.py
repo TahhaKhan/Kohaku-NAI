@@ -7,7 +7,7 @@ import zipfile
 import json
 import piexif
 from typing import Any
-
+import base64
 from PIL import Image
 from httpx import AsyncClient
 from curl_cffi.requests import AsyncSession
@@ -24,6 +24,10 @@ HttpClient = AsyncClient | AsyncSession
 jwt_token = ""
 global_client: HttpClient | None = None
 
+def image_to_base64_str(img: Image.Image) -> str:
+    buffered = io.BytesIO()
+    img.save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 async def make_client(
     backend: str = "httpx",
@@ -76,13 +80,15 @@ async def set_client(
 
 QUALITY_TAGS = "best quality, amazing quality, very aesthetic, absurdres"
 UCPRESET = {
-    "Heavy": (
-        "lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, "
-        "bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, "
-        "artistic error, username, scan, [abstract]"
-    ),
-    "Light": "lowres, jpeg artifacts, worst quality, watermark, blurry, very displeasing",
-    "None": "lowres",
+    "Heavy": "lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract],",
+    "Light": "lowres, jpeg artifacts, worst quality, watermark, blurry, very displeasing,",
+    "Human Focus": "lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract], bad anatomy, bad hands, @_@, mismatched pupils, heart-shaped pupils, glowing eyes,",
+    "None": "",
+}
+UCPRESETV4 = {
+    "Heavy": "blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, logo, dated, signature, multiple views,",
+    "Light": "blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, logo, dated, signature,",
+    "None": "",
 }
 DEFAULT_ARGS = {
     "prompt": "",
@@ -133,19 +139,38 @@ async def remote_gen(
     dyn=False,
     dyn_threshold=False,
     cfg_rescale=0,
+    model="nai-diffusion-3",
+    variety=False,
+    reference_image_multiple=None,
+    reference_information_extracted_multiple=None,
+    reference_strength_multiple=None,
     extra_infos={},
     priority=0,
     **kwargs,
 ):
-    if kwargs:
-        print(f"Unused kwargs: {kwargs.keys()}")
+    if reference_image_multiple is None:
+        reference_image_multiple = []
+    if reference_information_extracted_multiple is None:
+        reference_information_extracted_multiple = []
+    if reference_strength_multiple is None:
+        reference_strength_multiple = []
+
+    if seed == -1:
+        seed = random.randint(0, 2**32 - 1)
+
+    # Convert any PIL images in the reference_image_multiple list into base64 strings.
+    new_ref_images = []
+    for ref in reference_image_multiple:
+        if isinstance(ref, Image.Image):
+            new_ref_images.append(image_to_base64_str(ref))
+        else:
+            new_ref_images.append(ref)
+    reference_image_multiple = new_ref_images
+
+
     payload = {
         "prompt": f"{prompt}, {QUALITY_TAGS}" if quality_tags else prompt,
-        "neg_prompt": (
-            f"{UCPRESET[ucpreset]}, {negative_prompt}"
-            if ucpreset in UCPRESET
-            else negative_prompt
-        ),
+        "neg_prompt": f"{UCPRESET[ucpreset]}, {negative_prompt}" if ucpreset in UCPRESET else negative_prompt,
         "seed": seed,
         "scale": scale,
         "width": width,
@@ -158,11 +183,15 @@ async def remote_gen(
         "dyn_threshold": dyn_threshold,
         "cfg_rescale": cfg_rescale,
         "extra_infos": (
-            extra_infos
-            if isinstance(extra_infos, str)
-            else json.dumps(extra_infos, ensure_ascii=False)
+            extra_infos if isinstance(extra_infos, str) else json.dumps(extra_infos, ensure_ascii=False)
         ),
         "priority": priority,
+        # NEW fields:
+        "model": model,
+        "variety": variety,
+        "reference_image_multiple": reference_image_multiple,
+        "reference_information_extracted_multiple": reference_information_extracted_multiple,
+        "reference_strength_multiple": reference_strength_multiple,
     }
     response = await global_client.post(f"{end_point}/gen", json=payload)
     if response.status_code == 200:
@@ -175,6 +204,7 @@ async def remote_gen(
         except json.JSONDecodeError:
             data = response.content
         return None, data
+
 
 
 async def generate_novelai_image(
@@ -194,50 +224,118 @@ async def generate_novelai_image(
     dyn_threshold=False,
     cfg_rescale=0,
     client: HttpClient | None = None,
+    model="nai-diffusion-3",
+    variety=False,
+    reference_image_multiple=None,
+    reference_information_extracted_multiple=None,
+    reference_strength_multiple=None,
     **kwargs,
 ):
-    if kwargs:
-        print(f"Unused kwargs: {kwargs.keys()}")
-    if client is None:
-        client = global_client
-    # Assign a random seed if seed is -1
+    if reference_image_multiple is None:
+        reference_image_multiple = []
+    if reference_information_extracted_multiple is None:
+        reference_information_extracted_multiple = []
+    if reference_strength_multiple is None:
+        reference_strength_multiple = []
+    # If seed is -1, generate a random seed.
     if seed == -1:
         seed = random.randint(0, 2**32 - 1)
 
-    # Define the payload
-    payload = {
-        "action": "generate",
-        "input": f"{prompt}, {QUALITY_TAGS}" if quality_tags else prompt,
-        "model": "nai-diffusion-3",
-        "parameters": {
-            "width": width,
-            "height": height,
-            "scale": scale,
-            "sampler": sampler,
-            "steps": steps,
-            "n_samples": 1,
-            "ucPreset": 0,
-            "add_original_image": False,
-            "cfg_rescale": cfg_rescale,
-            "controlnet_strength": 1,
-            "dynamic_thresholding": dyn_threshold,
-            "legacy": False,
-            "negative_prompt": (
-                f"{UCPRESET[ucpreset]}, {negative_prompt}"
-                if ucpreset in UCPRESET
-                else negative_prompt
-            ),
-            "noise_schedule": schedule,
-            "qualityToggle": True,
-            "seed": seed,
-            "sm": smea,
-            "sm_dyn": dyn,
-            "uncond_scale": 1,
-        },
-    }
+    # Convert any PIL images in the reference_image_multiple list into base64 strings.
+    new_ref_images = []
+    for ref in reference_image_multiple:
+        if isinstance(ref, Image.Image):
+            new_ref_images.append(image_to_base64_str(ref))
+        else:
+            new_ref_images.append(ref)
+    reference_image_multiple = new_ref_images
 
-    # Send the POST request
+    # Build payload differently depending on the model
+    if model == "nai-diffusion-4-curated-preview":
+        if ucpreset not in ["Heavy", "Light", "None"]:
+            preset = 1  # default to Light
+        else:
+            preset = {"Heavy": 0, "Light": 1, "None": 2}[ucpreset]
+        neg = f"{UCPRESETV4[ucpreset]}, {negative_prompt}" if ucpreset in UCPRESET else negative_prompt
+        payload = {
+            "input": prompt,
+            "model": model,
+            "action": "generate",
+            "parameters": {
+                "params_version": 3,
+                "width": width,
+                "height": height,
+                "scale": scale,
+                "sampler": sampler,
+                "steps": steps,
+                "n_samples": 1,
+                "ucPreset": preset,
+                "qualityToggle": True,
+                "dynamic_thresholding": dyn_threshold,
+                "controlnet_strength": 1,
+                "legacy": False,
+                "add_original_image": True,
+                "cfg_rescale": cfg_rescale,
+                "noise_schedule": schedule,
+                "legacy_v3_extend": False,
+                "skip_cfg_above_sigma": 19 if variety else None,
+                "use_coords": False,
+                "v4_prompt": {
+                    "caption": {"base_caption": prompt, "char_captions": []},
+                    "use_coords": False,
+                    "use_order": True,
+                },
+                "v4_negative_prompt": {
+                    "caption": {"base_caption": neg, "char_captions": []}
+                },
+                "seed": seed,
+                "characterPrompts": [],
+                "negative_prompt": neg,
+                "reference_image_multiple": [],  # v4 currently disables reference images
+                "reference_information_extracted_multiple": [],
+                "reference_strength_multiple": [],
+            },
+        }
+    else:
+        # v3 model payload
+        if ucpreset not in ["Heavy", "Light", "Human Focus", "None"]:
+            preset = 0  
+        else:
+            preset = {"Heavy": 0, "Light": 1, "Human Focus": 2, "None": 3}[ucpreset]
+        neg = f"{UCPRESET[ucpreset]}, {negative_prompt}" if ucpreset in UCPRESET else negative_prompt
+        payload = {
+            "action": "generate",
+            "input": f"{prompt}, {QUALITY_TAGS}" if quality_tags else prompt,
+            "model": model,
+            "parameters": {
+                "width": width,
+                "height": height,
+                "scale": scale,
+                "sampler": sampler,
+                "steps": steps,
+                "n_samples": 1,
+                "ucPreset": preset,
+                "qualityToggle": True,
+                "sm": smea,
+                "sm_dyn": dyn,
+                "dynamic_thresholding": dyn_threshold,
+                "controlnet_strength": 1,
+                "legacy": False,
+                "add_original_image": True,
+                "cfg_rescale": cfg_rescale,
+                "noise_schedule": schedule,
+                "legacy_v3_extend": False,
+                "skip_cfg_above_sigma": 19 if variety else None,
+                "seed": seed,
+                "characterPrompts": [],
+                "negative_prompt": neg,
+                "reference_image_multiple": reference_image_multiple,
+                "reference_information_extracted_multiple": reference_information_extracted_multiple,
+                "reference_strength_multiple": reference_strength_multiple,
+            },
+        }
     response = await client.post(f"{API_IMAGE_URL}/ai/generate-image", json=payload)
+
 
     # Process the response
     if response.headers.get("Content-Type") == "binary/octet-stream":

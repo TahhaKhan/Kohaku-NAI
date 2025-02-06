@@ -243,7 +243,13 @@ async def gen(context: GenerateRequest, request: Request):
                     context.dyn_threshold,
                     context.cfg_rescale,
                     client=http_client,
+                    model=context.model,
+                    variety=context.variety,
+                    reference_image_multiple=context.reference_image_multiple,
+                    reference_information_extracted_multiple=context.reference_information_extracted_multiple,
+                    reference_strength_multiple=context.reference_strength_multiple,
                 )
+
             error = not isinstance(img_bytes, bytes)
             if error:
                 # Apply error status to client before we release it
