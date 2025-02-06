@@ -248,6 +248,7 @@ async def gen(context: GenerateRequest, request: Request):
                     reference_image_multiple=context.reference_image_multiple,
                     reference_information_extracted_multiple=context.reference_information_extracted_multiple,
                     reference_strength_multiple=context.reference_strength_multiple,
+                    character_prompts=context.characterPrompts
                 )
 
             error = not isinstance(img_bytes, bytes)

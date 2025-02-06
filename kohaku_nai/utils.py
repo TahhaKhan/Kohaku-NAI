@@ -146,6 +146,7 @@ async def remote_gen(
     reference_strength_multiple=None,
     extra_infos={},
     priority=0,
+    character_prompts=[],
     **kwargs,
 ):
     if reference_image_multiple is None:
@@ -158,7 +159,6 @@ async def remote_gen(
     if seed == -1:
         seed = random.randint(0, 2**32 - 1)
 
-    # Convert any PIL images in the reference_image_multiple list into base64 strings.
     new_ref_images = []
     for ref in reference_image_multiple:
         if isinstance(ref, Image.Image):
@@ -186,13 +186,52 @@ async def remote_gen(
             extra_infos if isinstance(extra_infos, str) else json.dumps(extra_infos, ensure_ascii=False)
         ),
         "priority": priority,
-        # NEW fields:
         "model": model,
         "variety": variety,
         "reference_image_multiple": reference_image_multiple,
         "reference_information_extracted_multiple": reference_information_extracted_multiple,
         "reference_strength_multiple": reference_strength_multiple,
+        "characterPrompts": character_prompts,
     }
+
+    if model.strip() == "nai-diffusion-4-curated-preview":
+        v4_char_captions = [{"char_caption": cp["prompt"], "centers": [cp["center"]]} for cp in character_prompts]
+        v4_neg_char_captions = [{"char_caption": cp["uc"], "centers": [cp["center"]]} for cp in character_prompts]
+        payload["parameters"] = {
+            "params_version": 3,
+            "width": width,
+            "height": height,
+            "scale": scale,
+            "sampler": sampler,
+            "steps": steps,
+            "n_samples": 1,
+            "ucPreset": 0,  
+            "qualityToggle": True,
+            "dynamic_thresholding": dyn_threshold,
+            "controlnet_strength": 1,
+            "legacy": False,
+            "add_original_image": True,
+            "cfg_rescale": cfg_rescale,
+            "noise_schedule": schedule,
+            "legacy_v3_extend": False,
+            "skip_cfg_above_sigma": 19 if variety else None,
+            "use_coords": True, 
+            "v4_prompt": {
+                "caption": {"base_caption": prompt, "char_captions": v4_char_captions},
+                "use_coords": True,
+                "use_order": True
+            },
+            "v4_negative_prompt": {
+                "caption": {"base_caption": negative_prompt, "char_captions": v4_neg_char_captions}
+            },
+            "seed": seed,
+            "characterPrompts": character_prompts,
+            "negative_prompt": negative_prompt,
+            "reference_image_multiple": [],  
+            "reference_information_extracted_multiple": [],
+            "reference_strength_multiple": [],
+        }
+    
     response = await global_client.post(f"{end_point}/gen", json=payload)
     if response.status_code == 200:
         mem_file = io.BytesIO(response.content)
@@ -229,6 +268,7 @@ async def generate_novelai_image(
     reference_image_multiple=None,
     reference_information_extracted_multiple=None,
     reference_strength_multiple=None,
+    character_prompts=[],
     **kwargs,
 ):
     if reference_image_multiple is None:
@@ -237,11 +277,9 @@ async def generate_novelai_image(
         reference_information_extracted_multiple = []
     if reference_strength_multiple is None:
         reference_strength_multiple = []
-    # If seed is -1, generate a random seed.
     if seed == -1:
         seed = random.randint(0, 2**32 - 1)
 
-    # Convert any PIL images in the reference_image_multiple list into base64 strings.
     new_ref_images = []
     for ref in reference_image_multiple:
         if isinstance(ref, Image.Image):
@@ -250,13 +288,14 @@ async def generate_novelai_image(
             new_ref_images.append(ref)
     reference_image_multiple = new_ref_images
 
-    # Build payload differently depending on the model
     if model == "nai-diffusion-4-curated-preview":
         if ucpreset not in ["Heavy", "Light", "None"]:
-            preset = 1  # default to Light
+            preset = 1 
         else:
             preset = {"Heavy": 0, "Light": 1, "None": 2}[ucpreset]
         neg = f"{UCPRESETV4[ucpreset]}, {negative_prompt}" if ucpreset in UCPRESET else negative_prompt
+        v4_char_captions = [{"char_caption": cp["prompt"], "centers": [cp["center"]]} for cp in character_prompts]
+        v4_neg_char_captions = [{"char_caption": cp["uc"], "centers": [cp["center"]]} for cp in character_prompts]
         payload = {
             "input": prompt,
             "model": model,
@@ -281,23 +320,38 @@ async def generate_novelai_image(
                 "skip_cfg_above_sigma": 19 if variety else None,
                 "use_coords": False,
                 "v4_prompt": {
-                    "caption": {"base_caption": prompt, "char_captions": []},
-                    "use_coords": False,
-                    "use_order": True,
+                    "caption": {"base_caption": prompt, "char_captions": v4_char_captions},
+                    "use_coords": True,
+                    "use_order": True
                 },
                 "v4_negative_prompt": {
-                    "caption": {"base_caption": neg, "char_captions": []}
+                    "caption": {"base_caption": neg, "char_captions": v4_neg_char_captions}
                 },
                 "seed": seed,
                 "characterPrompts": [],
                 "negative_prompt": neg,
-                "reference_image_multiple": [],  # v4 currently disables reference images
+                "reference_image_multiple": [], 
                 "reference_information_extracted_multiple": [],
                 "reference_strength_multiple": [],
             },
         }
+        if character_prompts:
+            v4_char_captions = [{"char_caption": cp["prompt"], "centers": [cp["center"]]} for cp in character_prompts]
+            v4_neg_char_captions = [{"char_caption": cp["uc"], "centers": [cp["center"]]} for cp in character_prompts]
+            payload["parameters"].update({
+                "use_coords": True,
+                "v4_prompt": {
+                    "caption": {"base_caption": prompt, "char_captions": v4_char_captions},
+                    "use_coords": True,
+                    "use_order": True
+                },
+                "v4_negative_prompt": {
+                    "caption": {"base_caption": neg, "char_captions": v4_neg_char_captions}
+                },
+                "characterPrompts": character_prompts,
+            })
+        print (payload)
     else:
-        # v3 model payload
         if ucpreset not in ["Heavy", "Light", "Human Focus", "None"]:
             preset = 0  
         else:
@@ -337,7 +391,6 @@ async def generate_novelai_image(
     response = await client.post(f"{API_IMAGE_URL}/ai/generate-image", json=payload)
 
 
-    # Process the response
     if response.headers.get("Content-Type") == "binary/octet-stream":
         zipfile_in_memory = io.BytesIO(response.content)
         with zipfile.ZipFile(zipfile_in_memory, "r") as zip_ref:

@@ -20,7 +20,6 @@ from kohaku_nai.client_modules import extension
 client_config: dict = toml.load("config.toml")["client"]
 extra_infos = client_config.get("remote_extra_infos", {})
 
-
 def control_ui():
     prompt = gr.TextArea(
         label="Prompt",
@@ -149,7 +148,15 @@ async def generate(
     ref_img2, ref_info2, ref_strength2,
     ref_img3, ref_info3, ref_strength3,
     ref_img4, ref_info4, ref_strength4,
-    ref_img5, ref_info5, ref_strength5
+    ref_img5, ref_info5, ref_strength5,
+    # NEW character controls:
+    use_ai_char,
+    char_prompt1, char_neg1, char_x1, char_y1,
+    char_prompt2, char_neg2, char_x2, char_y2,
+    char_prompt3, char_neg3, char_x3, char_y3,
+    char_prompt4, char_neg4, char_x4, char_y4,
+    char_prompt5, char_neg5, char_x5, char_y5,
+    char_prompt6, char_neg6, char_x6, char_y6,
 ):
 
     prompt = extension.process_prompt(prompt)
@@ -166,11 +173,39 @@ async def generate(
             (ref_img4, ref_info4, ref_strength4),
             (ref_img5, ref_info5, ref_strength5)]:
         if r_img is not None:
-            # (Assume r_img is already a base64 string or you encode it as needed)
             reference_images.append(r_img)
             reference_info.append(r_info)
             reference_strength.append(r_str)
 
+    # Build character_prompts if model = v4
+    character_prompts = []
+    if model.strip() == "nai-diffusion-4-curated-preview":
+        def make_char(cp, cn, x, y):
+            if not cp or not cp.strip():
+                return None
+
+            cp = extension.process_prompt(cp)  
+            cn = extension.process_prompt(cn)
+            
+            if use_ai_char:
+                center = {"x": 0.5, "y": 0.5}
+            else:
+                center = {"x": float(x), "y": float(y)}
+            return {
+                "prompt": cp.strip(),
+                "uc": (cn.strip() if cn else ""),
+                "center": center,
+            }
+
+        char_list = [
+            make_char(char_prompt1, char_neg1, char_x1, char_y1),
+            make_char(char_prompt2, char_neg2, char_x2, char_y2),
+            make_char(char_prompt3, char_neg3, char_x3, char_y3),
+            make_char(char_prompt4, char_neg4, char_x4, char_y4),
+            make_char(char_prompt5, char_neg5, char_x5, char_y5),
+            make_char(char_prompt6, char_neg6, char_x6, char_y6),
+        ]
+        character_prompts = [c for c in char_list if c is not None]
 
     if mode == "remote":
         if (pswd := end_point_pswd) or (pswd := client_config["end_point_pswd"]):
@@ -198,6 +233,7 @@ async def generate(
             reference_information_extracted_multiple=reference_info,
             reference_strength_multiple=reference_strength,
             extra_infos=extra_info_json,
+            character_prompts=character_prompts
         )
         if not isinstance(img_data, bytes):
             print(f"Error Message: {img_data}")
@@ -226,6 +262,7 @@ async def generate(
             reference_information_extracted_multiple=reference_info,
             reference_strength_multiple=reference_strength,
             extra_infos=extra_info_json,
+            character_prompts=character_prompts
         )
         if not isinstance(img_data, bytes):
             print(f"Error Message: {img_data}")
@@ -261,20 +298,54 @@ def main_ui():
                     with gr.TabItem("Gen"):
                         (width, height), controls = control_ui()
                     with gr.TabItem("Settings"):
-                        # Capture the advanced controls; note that model_selector is returned as index 6
                         adv_controls, modes = settings_ui()
-                        # Unpack for clarity:
                         (scheduler, smea, dyn, dyn_threshold, cfg_rescale,
                          extra_info_json, model_selector, variety_chk) = adv_controls
             with gr.Column():
                 gen_btn = gr.Button(value="Generate", variant="primary")
                 image = preview_ui()
-        
-        # Define the Reference Images accordion (placed outside the tabs)
+            # --- New Character Controls for V4 (only visible when model == "nai-diffusion-4-curated-preview") ---
+        with gr.Accordion("Characters (V4 only)", open=False, elem_id="char_container") as char_container:
+            gr.Markdown("You may add up to 6 characters. Leave the prompt empty to ignore a character.")
+            use_ai_char = gr.Checkbox(
+                label="Use AI's Choice for Character Positions",
+                value=True,
+                info="If checked, all positions become (0.5,0.5) ignoring your X/Y fields",
+            )
+
+            char_prompt1 = gr.Textbox(label="Character 1 Prompt", placeholder="e.g. 1girl, red hair...")
+            char_neg1 = gr.Textbox(label="Character 1 Negative", placeholder="Optional undesired tags")
+            char_x1 = gr.Number(label="Character 1 X", value=0.5, precision=3)
+            char_y1 = gr.Number(label="Character 1 Y", value=0.5, precision=3)
+
+            char_prompt2 = gr.Textbox(label="Character 2 Prompt", placeholder="e.g. 1girl, red hair...")
+            char_neg2 = gr.Textbox(label="Character 2 Negative", placeholder="Optional undesired tags")
+            char_x2 = gr.Number(label="Character 2 X", value=0.5, precision=3)
+            char_y2 = gr.Number(label="Character 2 Y", value=0.5, precision=3)
+
+            char_prompt3 = gr.Textbox(label="Character 3 Prompt", placeholder="e.g. 1girl, red hair...")
+            char_neg3 = gr.Textbox(label="Character 3 Negative", placeholder="Optional undesired tags")
+            char_x3 = gr.Number(label="Character 3 X", value=0.5, precision=3)
+            char_y3 = gr.Number(label="Character 3 Y", value=0.5, precision=3)
+
+            char_prompt4 = gr.Textbox(label="Character 4 Prompt", placeholder="e.g. 1girl, red hair...")
+            char_neg4 = gr.Textbox(label="Character 4 Negative", placeholder="Optional undesired tags")
+            char_x4 = gr.Number(label="Character 4 X", value=0.5, precision=3)
+            char_y4 = gr.Number(label="Character 4 Y", value=0.5, precision=3)
+
+            char_prompt5 = gr.Textbox(label="Character 5 Prompt", placeholder="e.g. 1girl, red hair...")
+            char_neg5 = gr.Textbox(label="Character 5 Negative", placeholder="Optional undesired tags")
+            char_x5 = gr.Number(label="Character 5 X", value=0.5, precision=3)
+            char_y5 = gr.Number(label="Character 5 Y", value=0.5, precision=3)
+
+            char_prompt6 = gr.Textbox(label="Character 6 Prompt", placeholder="e.g. 1girl, red hair...")
+            char_neg6 = gr.Textbox(label="Character 6 Negative", placeholder="Optional undesired tags")
+            char_x6 = gr.Number(label="Character 6 X", value=0.5, precision=3)
+            char_y6 = gr.Number(label="Character 6 Y", value=0.5, precision=3)
+
         with gr.Accordion("Reference Images (v3 only)", open=False, elem_id="ref_images_container") as ref_container:
             gr.Markdown("You may add up to 5 reference images:")
             with gr.Column():
-                # Create five groups; initially only the first group is visible.
                 ref_img1 = gr.Image(label="Reference Image 1", type="pil", visible=True)
                 ref_info1 = gr.Slider(0, 1, 0.0, step=0.01, label="Info Extracted", visible=True)
                 ref_strength1 = gr.Slider(0, 1, 0.0, step=0.01, label="Reference Strength", visible=True)
@@ -297,53 +368,35 @@ def main_ui():
 
                 add_ref = gr.Button("Add Another Reference")
         
-        # ----- CALLBACKS ADDED HERE -----
-        # controls is the list returned by control_ui(); index 3 is neg_preset.
         def update_uc_choices(selected_model):
             if selected_model == "nai-diffusion-4-curated-preview":
-                # For v4, only these three choices should be available.
                 return gr.update(choices=["Heavy", "Light", "None"], value="Light")
             else:
-                # For v3, include the additional "Human Focus" option.
                 return gr.update(choices=["Heavy", "Light", "Human Focus", "None"], value="Light")
 
-        # Assume controls[3] is neg_preset and model_selector comes from settings_ui().
         model_selector.change(update_uc_choices, inputs=model_selector, outputs=controls[3])
 
-        # (1) Update the reference accordion visibility based on the model selection:
         model_selector.change(
             lambda m: gr.update(visible=(m == "nai-diffusion-3")),
             inputs=model_selector,
             outputs=ref_container
         )
+        model_selector.change(
+            lambda m: gr.update(visible=(m == "nai-diffusion-4-curated-preview")),
+            inputs=model_selector,
+            outputs=char_container
+        )
 
-        # (2) Simple example: clicking the "Add Another Reference" button reveals the second reference group.
-        # (You can replicate or extend this logic for further groups.)
-        # def reveal_next():
-        #     # This callback simply returns updates to make group 2 visible.
-        #     return (gr.update(visible=True),  # for ref_img2
-        #             gr.update(visible=True),  # for ref_info2
-        #             gr.update(visible=True))  # for ref_strength2
-
-        # add_ref.click(
-        #     fn=reveal_next,
-        #     inputs=None,
-        #     outputs=[ref_img2, ref_info2, ref_strength2]
-        # )
         ref_counter = gr.State(value=1)
 
         def reveal_next(counter):
-            # If there are fewer than 5 groups visible, increment counter
             new_counter = counter + 1 if counter < 5 else counter
-            # For groups 2 to 5, set visibility based on whether new_counter is at least that number.
             out_updates = []
-            for group in range(2, 6):  # Groups 2, 3, 4, 5
+            for group in range(2, 6): 
                 visible = new_counter >= group
-                # For each group, update its image, info, and strength.
                 out_updates.extend([gr.update(visible=visible)] * 3)
             return new_counter, *out_updates
 
-        # The callback will update the state and all groups for groups 2–5.
         add_ref.click(
             fn=reveal_next,
             inputs=ref_counter,
@@ -353,10 +406,6 @@ def main_ui():
                      ref_img4, ref_info4, ref_strength4,
                      ref_img5, ref_info5, ref_strength5]
         )
-        # ----- END CALLBACKS -----
-
-        # Now wire up the generate button click (make sure to include the new reference inputs
-        # in the parameter list if you plan to pass them to generate())
         gen_btn.click(
             generate,
             modes + controls + adv_controls + [
@@ -365,6 +414,13 @@ def main_ui():
                 ref_img3, ref_info3, ref_strength3,
                 ref_img4, ref_info4, ref_strength4,
                 ref_img5, ref_info5, ref_strength5,
+                use_ai_char,
+                char_prompt1, char_neg1, char_x1, char_y1,
+                char_prompt2, char_neg2, char_x2, char_y2,
+                char_prompt3, char_neg3, char_x3, char_y3,
+                char_prompt4, char_neg4, char_x4, char_y4,
+                char_prompt5, char_neg5, char_x5, char_y5,
+                char_prompt6, char_neg6, char_x6, char_y6,
             ],
             image
         )
