@@ -194,7 +194,7 @@ async def remote_gen(
         "characterPrompts": character_prompts,
     }
 
-    if model.strip() == "nai-diffusion-4-curated-preview":
+    if model.strip() in ("nai-diffusion-4-curated-preview", "nai-diffusion-4-full"):
         v4_char_captions = [{"char_caption": cp["prompt"], "centers": [cp["center"]]} for cp in character_prompts]
         v4_neg_char_captions = [{"char_caption": cp["uc"], "centers": [cp["center"]]} for cp in character_prompts]
         payload["parameters"] = {
@@ -288,7 +288,7 @@ async def generate_novelai_image(
             new_ref_images.append(ref)
     reference_image_multiple = new_ref_images
 
-    if model == "nai-diffusion-4-curated-preview":
+    if model.strip() in ("nai-diffusion-4-curated-preview", "nai-diffusion-4-full"):
         if ucpreset not in ["Heavy", "Light", "None"]:
             preset = 1 
         else:

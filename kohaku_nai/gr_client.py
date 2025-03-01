@@ -84,7 +84,11 @@ def settings_ui():
             gr.Markdown("### Advance Generation settings")
             with gr.Row():
                 model_selector = gr.Dropdown(
-                    choices=["nai-diffusion-3", "nai-diffusion-4-curated-preview"],
+                    choices=[
+                        "nai-diffusion-3",
+                        "nai-diffusion-4-curated-preview",
+                        "nai-diffusion-4-full"
+                    ],
                     value="nai-diffusion-3",
                     label="Model",
                     interactive=True,
@@ -179,7 +183,7 @@ async def generate(
 
     # Build character_prompts if model = v4
     character_prompts = []
-    if model.strip() == "nai-diffusion-4-curated-preview":
+    if model.strip() in ("nai-diffusion-4-curated-preview", "nai-diffusion-4-full"):
         def make_char(cp, cn, x, y):
             if not cp or not cp.strip():
                 return None
@@ -369,7 +373,7 @@ def main_ui():
                 add_ref = gr.Button("Add Another Reference")
         
         def update_uc_choices(selected_model):
-            if selected_model == "nai-diffusion-4-curated-preview":
+            if selected_model in ("nai-diffusion-4-curated-preview", "nai-diffusion-4-full"):
                 return gr.update(choices=["Heavy", "Light", "None"], value="Light")
             else:
                 return gr.update(choices=["Heavy", "Light", "Human Focus", "None"], value="Light")
