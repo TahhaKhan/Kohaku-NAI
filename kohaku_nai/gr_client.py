@@ -386,7 +386,7 @@ def main_ui():
             outputs=ref_container
         )
         model_selector.change(
-            lambda m: gr.update(visible=(m == "nai-diffusion-4-curated-preview")),
+            lambda m: gr.update(visible=(m in ("nai-diffusion-4-curated-preview", "nai-diffusion-4-full"))),
             inputs=model_selector,
             outputs=char_container
         )
