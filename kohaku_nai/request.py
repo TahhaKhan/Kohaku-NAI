@@ -24,3 +24,4 @@ class GenerateRequest(BaseModel):
     reference_information_extracted_multiple: list[float] = []
     reference_strength_multiple: list[float] = []
     characterPrompts: list[dict] = Field(default_factory=list)
+    use_ai_char: bool = False

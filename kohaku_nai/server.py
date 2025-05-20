@@ -226,6 +226,10 @@ async def gen(context: GenerateRequest, request: Request):
                     )
                 prev_gen_time = time.time()
 
+                # Force debug output on server side
+                print(f"[SERVER DEBUG] use_ai_char: {context.use_ai_char}, char length: {len(context.characterPrompts)}")
+                print(f"[SERVER DEBUG] Should use AI positioning: {context.use_ai_char and len(context.characterPrompts) > 0}")
+
                 img_bytes, json_payload = await generate_novelai_image(
                     context.prompt,
                     False,
@@ -248,8 +252,20 @@ async def gen(context: GenerateRequest, request: Request):
                     reference_image_multiple=context.reference_image_multiple,
                     reference_information_extracted_multiple=context.reference_information_extracted_multiple,
                     reference_strength_multiple=context.reference_strength_multiple,
-                    character_prompts=context.characterPrompts
+                    character_prompts=context.characterPrompts,
+                    use_ai_char=context.use_ai_char
                 )
+                
+                # Check the returned payload structure
+                if isinstance(json_payload, str):
+                    try:
+                        payload_dict = json.loads(json_payload)
+                        if "parameters" in payload_dict and "use_coords" in payload_dict["parameters"]:
+                            print(f"[SERVER DEBUG RESULT] Final payload use_coords: {payload_dict['parameters']['use_coords']}")
+                        if "parameters" in payload_dict and "v4_prompt" in payload_dict["parameters"] and "use_coords" in payload_dict["parameters"]["v4_prompt"]:
+                            print(f"[SERVER DEBUG RESULT] Final v4_prompt use_coords: {payload_dict['parameters']['v4_prompt']['use_coords']}")
+                    except json.JSONDecodeError:
+                        print("[SERVER DEBUG RESULT] Could not parse JSON payload")
 
             error = not isinstance(img_bytes, bytes)
             if error:

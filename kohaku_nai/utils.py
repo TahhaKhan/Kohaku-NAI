@@ -79,6 +79,7 @@ async def set_client(
 
 
 QUALITY_TAGS = "best quality, amazing quality, very aesthetic, absurdres"
+V45_QUALITY_TAGS = "location, masterpiece, no text, -0.8::feet::, rating:general"
 UCPRESET = {
     "Heavy": "lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract],",
     "Light": "lowres, jpeg artifacts, worst quality, watermark, blurry, very displeasing,",
@@ -89,6 +90,12 @@ UCPRESETV4 = {
     "Heavy": "blurry, lowres, error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, logo, dated, signature, multiple views,",
     "Light": "blurry, lowres, error, worst quality, bad quality, jpeg artifacts, very displeasing, logo, dated, signature,",
     "None": "",
+}
+UCPRESETV45 = {
+    "None": "",
+    "Light": "blurry, lowres, upscaled, artistic error, scan artifacts, jpeg artifacts, logo, too many watermarks, negative space, blank page",
+    "Heavy": "blurry, lowres, upscaled, artistic error, film grain, scan artifacts, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, halftone, multiple views, logo, too many watermarks, negative space, blank page",
+    "Human Focus": "blurry, lowres, upscaled, artistic error, film grain, scan artifacts, bad anatomy, bad hands, worst quality, bad quality, jpeg artifacts, very displeasing, chromatic aberration, halftone, multiple views, logo, too many watermarks, @_@, mismatched pupils, glowing eyes, negative space, blank page",
 }
 DEFAULT_ARGS = {
     "prompt": "",
@@ -147,6 +154,7 @@ async def remote_gen(
     extra_infos={},
     priority=0,
     character_prompts=[],
+    use_ai_char=False,
     **kwargs,
 ):
     if reference_image_multiple is None:
@@ -167,6 +175,10 @@ async def remote_gen(
             new_ref_images.append(ref)
     reference_image_multiple = new_ref_images
 
+    print(f"[DEBUG] use_ai_char: {use_ai_char}")
+    print(f"[DEBUG] character_prompts: {character_prompts}")
+    print(f"[DEBUG] ucpreset: {ucpreset}")
+    print(f"[DEBUG] model: {model}")
 
     payload = {
         "prompt": f"{prompt}, {QUALITY_TAGS}" if quality_tags else prompt,
@@ -194,7 +206,46 @@ async def remote_gen(
         "characterPrompts": character_prompts,
     }
 
-    if model.strip() in ("nai-diffusion-4-curated-preview", "nai-diffusion-4-full"):
+    if model.strip() in ("nai-diffusion-4-curated-preview", "nai-diffusion-4-full", "nai-diffusion-4-5-curated"):
+        # Handle preset mapping based on model
+        if ucpreset not in ["Heavy", "Light", "Human Focus", "None"]:
+            if model.strip() == "nai-diffusion-4-5-curated":
+                preset = 1  # Default to Light for V4.5
+            else:
+                preset = 1  # Default to Light for V4
+        else:
+            # Handle preset mapping based on model
+            if model.strip() == "nai-diffusion-4-5-curated":
+                preset = {"Heavy": 0, "Light": 1, "Human Focus": 2, "None": 3}[ucpreset]
+            else:
+                preset = {"Heavy": 0, "Light": 1, "None": 2}[ucpreset]
+        
+        # Handle V4.5 separately for UC presets and quality tags
+        if model.strip() == "nai-diffusion-4-5-curated":
+            neg = f"{UCPRESETV45[ucpreset]}, {negative_prompt}" if ucpreset in UCPRESETV45 else negative_prompt
+            if quality_tags:
+                prompt = f"{prompt}, {V45_QUALITY_TAGS}"
+        else:
+            neg = f"{UCPRESETV4[ucpreset]}, {negative_prompt}" if ucpreset in UCPRESETV4 else negative_prompt
+            # V4 models don't use quality tags by default
+
+        # Use the explicit use_ai_char parameter
+        using_ai_choice = use_ai_char and len(character_prompts) > 0
+        use_coords_value = not using_ai_choice  # True if manual, False if AI positioning
+        
+        print(f"[DEBUG DETAIL] use_ai_char: {use_ai_char}, character_prompts length: {len(character_prompts)}")
+        print(f"[DEBUG DETAIL] using_ai_choice: {using_ai_choice}, use_coords_value: {use_coords_value}")
+        print(f"[DEBUG DETAIL] Character prompts:")
+        for i, cp in enumerate(character_prompts):
+            print(f"  Char {i+1}: prompt='{cp.get('prompt', 'None')}', center={cp.get('center', 'None')}")
+        
+        # CRITICAL FIX: Check if any character prompt has use_ai_position flag
+        ai_position_requested = any(cp.get('use_ai_position', False) for cp in character_prompts if cp)
+        if ai_position_requested:
+            print("[DEBUG CRITICAL] Character prompt has use_ai_position flag - forcing AI positioning")
+            using_ai_choice = True
+            use_coords_value = False
+        
         v4_char_captions = [{"char_caption": cp["prompt"], "centers": [cp["center"]]} for cp in character_prompts]
         v4_neg_char_captions = [{"char_caption": cp["uc"], "centers": [cp["center"]]} for cp in character_prompts]
         payload["parameters"] = {
@@ -205,8 +256,9 @@ async def remote_gen(
             "sampler": sampler,
             "steps": steps,
             "n_samples": 1,
-            "ucPreset": 0,  
+            "ucPreset": preset,  
             "qualityToggle": True,
+            "autoSmea": smea,
             "dynamic_thresholding": dyn_threshold,
             "controlnet_strength": 1,
             "legacy": False,
@@ -215,23 +267,43 @@ async def remote_gen(
             "noise_schedule": schedule,
             "legacy_v3_extend": False,
             "skip_cfg_above_sigma": 19 if variety else None,
-            "use_coords": True, 
+            "use_coords": use_coords_value,
+            "normalize_reference_strength_multiple": True,
             "v4_prompt": {
                 "caption": {"base_caption": prompt, "char_captions": v4_char_captions},
-                "use_coords": True,
+                "use_coords": use_coords_value,
                 "use_order": True
             },
             "v4_negative_prompt": {
-                "caption": {"base_caption": negative_prompt, "char_captions": v4_neg_char_captions}
+                "caption": {"base_caption": neg, "char_captions": v4_neg_char_captions},
+                "use_coords": False,  # Always false for negative prompt
+                "use_order": False
             },
             "seed": seed,
             "characterPrompts": character_prompts,
-            "negative_prompt": negative_prompt,
+            "negative_prompt": neg,
             "reference_image_multiple": [],  
             "reference_information_extracted_multiple": [],
             "reference_strength_multiple": [],
+            "deliberate_euler_ancestral_bug": False,  # Match official client
+            "prefer_brownian": True  # Match official client
         }
-    
+
+    # Final debug check of use_coords settings
+    print(f"[DEBUG FINAL] remote_gen payload use_coords: {payload['parameters']['use_coords']}")
+    print(f"[DEBUG FINAL] remote_gen v4_prompt use_coords: {payload['parameters']['v4_prompt']['use_coords']}")
+    print(f"[DEBUG FINAL] remote_gen character_prompts count: {len(character_prompts)}")
+
+    # Update the payload prompt for remote_gen
+    if model.strip() == "nai-diffusion-4-5-curated" and quality_tags:
+        payload["prompt"] = prompt  # Use the already modified prompt
+        
+    # CRITICAL FIX: Force correct use_coords settings right before sending
+    if use_ai_char and len(character_prompts) > 0:
+        print("[DEBUG OVERRIDE] Forcing use_coords to False for AI positioning")
+        payload["parameters"]["use_coords"] = False
+        payload["parameters"]["v4_prompt"]["use_coords"] = False
+
     response = await global_client.post(f"{end_point}/gen", json=payload)
     if response.status_code == 200:
         mem_file = io.BytesIO(response.content)
@@ -269,6 +341,7 @@ async def generate_novelai_image(
     reference_information_extracted_multiple=None,
     reference_strength_multiple=None,
     character_prompts=[],
+    use_ai_char=False,
     **kwargs,
 ):
     if reference_image_multiple is None:
@@ -288,12 +361,46 @@ async def generate_novelai_image(
             new_ref_images.append(ref)
     reference_image_multiple = new_ref_images
 
-    if model.strip() in ("nai-diffusion-4-curated-preview", "nai-diffusion-4-full"):
-        if ucpreset not in ["Heavy", "Light", "None"]:
-            preset = 1 
+    if model.strip() in ("nai-diffusion-4-curated-preview", "nai-diffusion-4-full", "nai-diffusion-4-5-curated"):
+        # Handle preset mapping based on model
+        if ucpreset not in ["Heavy", "Light", "Human Focus", "None"]:
+            if model.strip() == "nai-diffusion-4-5-curated":
+                preset = 1  # Default to Light for V4.5
+            else:
+                preset = 1  # Default to Light for V4
         else:
-            preset = {"Heavy": 0, "Light": 1, "None": 2}[ucpreset]
-        neg = f"{UCPRESETV4[ucpreset]}, {negative_prompt}" if ucpreset in UCPRESET else negative_prompt
+            # Handle preset mapping based on model
+            if model.strip() == "nai-diffusion-4-5-curated":
+                preset = {"Heavy": 0, "Light": 1, "Human Focus": 2, "None": 3}[ucpreset]
+            else:
+                preset = {"Heavy": 0, "Light": 1, "None": 2}[ucpreset]
+        
+        # Handle V4.5 separately for UC presets and quality tags
+        if model.strip() == "nai-diffusion-4-5-curated":
+            neg = f"{UCPRESETV45[ucpreset]}, {negative_prompt}" if ucpreset in UCPRESETV45 else negative_prompt
+            if quality_tags:
+                prompt = f"{prompt}, {V45_QUALITY_TAGS}"
+        else:
+            neg = f"{UCPRESETV4[ucpreset]}, {negative_prompt}" if ucpreset in UCPRESETV4 else negative_prompt
+            # V4 models don't use quality tags by default
+        
+        # Use the explicit use_ai_char parameter
+        using_ai_choice = use_ai_char and len(character_prompts) > 0
+        use_coords_value = not using_ai_choice  # True if manual, False if AI positioning
+        
+        print(f"[DEBUG DETAIL] use_ai_char: {use_ai_char}, character_prompts length: {len(character_prompts)}")
+        print(f"[DEBUG DETAIL] using_ai_choice: {using_ai_choice}, use_coords_value: {use_coords_value}")
+        print(f"[DEBUG DETAIL] Character prompts:")
+        for i, cp in enumerate(character_prompts):
+            print(f"  Char {i+1}: prompt='{cp.get('prompt', 'None')}', center={cp.get('center', 'None')}")
+        
+        # CRITICAL FIX: Check if any character prompt has use_ai_position flag
+        ai_position_requested = any(cp.get('use_ai_position', False) for cp in character_prompts if cp)
+        if ai_position_requested:
+            print("[DEBUG CRITICAL] Character prompt has use_ai_position flag - forcing AI positioning")
+            using_ai_choice = True
+            use_coords_value = False
+        
         v4_char_captions = [{"char_caption": cp["prompt"], "centers": [cp["center"]]} for cp in character_prompts]
         v4_neg_char_captions = [{"char_caption": cp["uc"], "centers": [cp["center"]]} for cp in character_prompts]
         payload = {
@@ -310,6 +417,7 @@ async def generate_novelai_image(
                 "n_samples": 1,
                 "ucPreset": preset,
                 "qualityToggle": True,
+                "autoSmea": smea,
                 "dynamic_thresholding": dyn_threshold,
                 "controlnet_strength": 1,
                 "legacy": False,
@@ -318,14 +426,17 @@ async def generate_novelai_image(
                 "noise_schedule": schedule,
                 "legacy_v3_extend": False,
                 "skip_cfg_above_sigma": 19 if variety else None,
-                "use_coords": False,
+                "use_coords": use_coords_value,
+                "normalize_reference_strength_multiple": True,
                 "v4_prompt": {
                     "caption": {"base_caption": prompt, "char_captions": v4_char_captions},
-                    "use_coords": True,
+                    "use_coords": use_coords_value,
                     "use_order": True
                 },
                 "v4_negative_prompt": {
-                    "caption": {"base_caption": neg, "char_captions": v4_neg_char_captions}
+                    "caption": {"base_caption": neg, "char_captions": v4_neg_char_captions},
+                    "use_coords": False,  # Always false for negative prompt
+                    "use_order": False
                 },
                 "seed": seed,
                 "characterPrompts": [],
@@ -333,23 +444,24 @@ async def generate_novelai_image(
                 "reference_image_multiple": [], 
                 "reference_information_extracted_multiple": [],
                 "reference_strength_multiple": [],
+                "deliberate_euler_ancestral_bug": False,  # Match official client
+                "prefer_brownian": True  # Match official client
             },
         }
         if character_prompts:
-            v4_char_captions = [{"char_caption": cp["prompt"], "centers": [cp["center"]]} for cp in character_prompts]
-            v4_neg_char_captions = [{"char_caption": cp["uc"], "centers": [cp["center"]]} for cp in character_prompts]
-            payload["parameters"].update({
-                "use_coords": True,
-                "v4_prompt": {
-                    "caption": {"base_caption": prompt, "char_captions": v4_char_captions},
-                    "use_coords": True,
-                    "use_order": True
-                },
-                "v4_negative_prompt": {
-                    "caption": {"base_caption": neg, "char_captions": v4_neg_char_captions}
-                },
-                "characterPrompts": character_prompts,
-            })
+            payload["parameters"]["characterPrompts"] = character_prompts
+        
+        # Final debug check of use_coords settings
+        print(f"[DEBUG FINAL] generate_novelai_image payload use_coords: {payload['parameters']['use_coords']}")
+        print(f"[DEBUG FINAL] generate_novelai_image v4_prompt use_coords: {payload['parameters']['v4_prompt']['use_coords']}")
+        print(f"[DEBUG FINAL] generate_novelai_image character_prompts count: {len(character_prompts)}")
+        
+        # CRITICAL FIX: Force correct use_coords settings right before sending
+        if use_ai_char and len(character_prompts) > 0:
+            print("[DEBUG OVERRIDE] Forcing use_coords to False for AI positioning")
+            payload["parameters"]["use_coords"] = False
+            payload["parameters"]["v4_prompt"]["use_coords"] = False
+        
         print (payload)
     else:
         if ucpreset not in ["Heavy", "Light", "Human Focus", "None"]:
